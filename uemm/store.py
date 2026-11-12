@@ -12,6 +12,7 @@ from pathlib import Path
 APP_HOME = Path(os.environ.get("UEMM_HOME") or (Path.home() / ".uemm"))
 CONFIG_PATH = APP_HOME / "config.json"
 STATE_PATH = APP_HOME / "state.json"
+RENAME_PATH = APP_HOME / "renames.json"
 
 DEFAULT_CONFIG = {"port": 8780, "games": {}}
 
@@ -138,3 +139,31 @@ def set_enabled(key, mod_id, on):
     st = state()
     st.setdefault(key, {})[mod_id] = bool(on)
     save_state(st)
+
+
+# --------------------------------------------------------------------------
+# 部署时的改名映射（只改链接名，不动源文件）
+# 结构：{game_key: {mod_id: {相对路径: 新的相对路径}}}
+# --------------------------------------------------------------------------
+
+
+def renames(key):
+    return _load(RENAME_PATH, {}).get(key, {})
+
+
+def set_rename(key, mod_id, rel, out_rel):
+    data = _load(RENAME_PATH, {})
+    data.setdefault(key, {}).setdefault(mod_id, {})[rel] = out_rel
+    _save(RENAME_PATH, data)
+
+
+def clear_rename(key, mod_id, rel=None):
+    data = _load(RENAME_PATH, {})
+    mods = data.get(key, {}).get(mod_id)
+    if not mods:
+        return
+    if rel is None:
+        mods.clear()
+    else:
+        mods.pop(rel, None)
+    _save(RENAME_PATH, data)

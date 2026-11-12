@@ -28,6 +28,7 @@ _LOCK = threading.RLock()
 
 def _locked(fn):
     def wrapper(*args, **kwargs):
+        with _LOCK:
             return fn(*args, **kwargs)
     wrapper.__name__ = fn.__name__
     return wrapper
@@ -157,7 +158,9 @@ def list_mods(game, include_conflicts=True):
             if not entry.is_dir() or entry.name.startswith("."):
                 continue
             files = walk_files(entry)
-            paks = [rel for rel, _p, _s in files if rel.lower().endswith(".pak")]
+            mapping = store.renames(game["key"]).get(entry.name, {})
+            paks = [mapping.get(rel, rel) for rel, _p, _s in files
+                    if rel.lower().endswith(".pak")]
             total = sum(s for _r, _p, s in files)
             deployed = (target / entry.name).is_dir()
             verdict = analyze_mod(entry, iostore)
@@ -281,11 +284,18 @@ def deploy_mod(game, mod_id):
 
     stats = {"linked": 0, "copied": 0, "failed": 0}
     placed = []
+    mapping = store.renames(game["key"]).get(mod_id, {})
+    used_out = set()
     for rel, src, _size in walk_files(src_dir):
-        dst = dst_dir / rel
+        out_rel = mapping.get(rel, rel)
+        if out_rel in used_out:            # 改名后撞车，退让出唯一名字
+            base = Path(out_rel)
+            out_rel = f"{base.parent.as_posix()}/{base.stem}-dup{len(used_out)}{base.suffix}".lstrip("./")
+        used_out.add(out_rel)
+        dst = dst_dir / out_rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         if _link(src, dst, stats):
-            placed.append(rel)
+            placed.append(out_rel)
 
     manifest = _manifest(target)
     manifest["mods"][mod_id] = placed
@@ -392,6 +402,23 @@ def _save_manifest(target: Path, data):
             json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def manifest_mods(game):
+    return dict(_manifest(mods_target(game)).get("mods", {}))
+
+
+def same_file(a: Path, b: Path):
+    """两个路径是否指向同一份数据（硬链接）。"""
+    try:
+        return a.stat().st_ino == b.stat().st_ino and a.stat().st_dev == b.stat().st_dev
+    except OSError:
+        return False
+
+
+def chunk_of(name):
+    hit = CHUNK_RE.search(Path(name).name)
+    return int(hit.group(1)) if hit else None
 
 
 # --------------------------------------------------------------------------

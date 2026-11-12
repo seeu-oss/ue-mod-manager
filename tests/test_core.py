@@ -19,7 +19,7 @@ os.environ["UEMM_HOME"] = _TMP_HOME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from uemm import detect, i18n, mods, store  # noqa: E402
+from uemm import detect, doctor, i18n, mods, store  # noqa: E402
 
 PAK_MAGIC = b"\xe1\x12\x6f\x5a"
 
@@ -484,3 +484,116 @@ class TestStore(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestDoctor(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="doc_"))
+        self.root = self.tmp / "Game"
+        make_game(self.root)
+        info = detect.detect_ue(self.root)
+        key = store.add_game(info)
+        store.update_game(key, staging=str(self.tmp / "staging"))
+        self.game = store.get_game(key)
+        self.game["key"] = key
+        self.staging = Path(self.game["staging"])
+        self.target = mods.mods_target(self.game)
+        self.staging.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _mod(self, name, files):
+        d = self.staging / name
+        for rel, data in files.items():
+            p = d / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_bytes(data)
+        return d
+
+    def _kinds(self):
+        return [i["kind"] for i in doctor.diagnose(self.game)["issues"]]
+
+    def test_clean(self):
+        self._mod("Good", {"a.pak": fake_pak()})
+        mods.deploy_all(self.game)
+        self.assertEqual(self._kinds(), [])
+
+    def test_not_ue_detected_and_disabled(self):
+        self._mod("VortexExt", {"index.js": b"x", "info.json": b"{}"})
+        mods.deploy_all(self.game)
+        self.assertIn("not_ue", self._kinds())
+
+        rep = doctor.diagnose(self.game)
+        issue = [i for i in rep["issues"] if i["kind"] == "not_ue"][0]
+        res = doctor.apply_fix(self.game, issue["fix"])
+        self.assertTrue(res["ok"])
+        self.assertFalse((self.target / "VortexExt").exists())
+
+    def test_nested_pak_hoisted(self):
+        self._mod("Nest", {"Content/Paks/x.pak": fake_pak()})
+        mods.deploy_all(self.game)
+        self.assertIn("nested", self._kinds())
+        self.assertTrue((self.target / "Nest" / "Content" / "Paks" / "x.pak").exists())
+
+        rep = doctor.diagnose(self.game)
+        issue = [i for i in rep["issues"] if i["kind"] == "nested"][0]
+        doctor.apply_fix(self.game, issue["fix"])
+
+        self.assertTrue((self.target / "Nest" / "x.pak").exists())
+        self.assertFalse((self.target / "Nest" / "Content").exists())
+        self.assertNotIn("nested", self._kinds())
+
+    def test_chunk_conflict_renumbered(self):
+        self._mod("ModA", {"pakchunk99-a.pak": fake_pak()})
+        self._mod("ModB", {"pakchunk99-b.pak": fake_pak()})
+        mods.deploy_all(self.game)
+
+        rep = doctor.diagnose(self.game)
+        issue = [i for i in rep["issues"] if i["kind"] == "chunk"][0]
+        self.assertEqual(issue["params"]["n"], 99)
+        doctor.apply_fix(self.game, issue["fix"])
+
+        names = []
+        for mid in ("ModA", "ModB"):
+            for f in (self.target / mid).iterdir():
+                names.append(f.name)
+        chunks = {mods.chunk_of(n) for n in names}
+        self.assertEqual(len(chunks), 2, f"改名后仍撞车：{names}")
+
+    def test_orphan_cleaned(self):
+        self._mod("Gone", {"a.pak": fake_pak()})
+        mods.deploy_all(self.game)
+        shutil.rmtree(self.staging / "Gone")
+
+        rep = doctor.diagnose(self.game)
+        issue = [i for i in rep["issues"] if i["kind"] == "orphan"][0]
+        self.assertEqual(issue["params"]["n"], 1)
+        doctor.apply_fix(self.game, issue["fix"])
+        self.assertFalse((self.target / "Gone").exists())
+
+    def test_copy_detected_and_relinked(self):
+        self._mod("Copied", {"a.pak": fake_pak()})
+        mods.deploy_all(self.game)
+        src = self.staging / "Copied" / "a.pak"
+        dst = self.target / "Copied" / "a.pak"
+        dst.unlink()
+        shutil.copy2(src, dst)
+        self.assertFalse(mods.same_file(src, dst))
+
+        rep = doctor.diagnose(self.game)
+        issue = [i for i in rep["issues"] if i["kind"] == "copy"][0]
+        doctor.apply_fix(self.game, issue["fix"])
+        self.assertTrue(mods.same_file(src, dst))
+
+    def test_running_blocks_fix(self):
+        self._mod("Bad", {"readme.txt": b"x"})
+        mods.deploy_all(self.game)
+        orig = mods.running
+        mods.running = lambda exe: True
+        try:
+            res = doctor.apply_fix(self.game, {"kind": "disable", "ids": ["Bad"]})
+        finally:
+            mods.running = orig
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["code"], "game_running")

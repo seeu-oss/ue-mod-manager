@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from . import detect, dialogs, i18n, mods, store
+from . import detect, dialogs, doctor, i18n, mods, store
 from .web import render
 
 
@@ -174,6 +174,12 @@ class Handler(BaseHTTPRequestHandler):
 
             elif path == "/api/deploy":
                 self.deploy(body)
+
+            elif path == "/api/doctor":
+                self.doctor(body)
+
+            elif path == "/api/doctor_fix":
+                self.doctor_fix(body)
 
             elif path == "/api/undeploy":
                 game = game_payload(body.get("key"))
@@ -344,6 +350,26 @@ class Handler(BaseHTTPRequestHandler):
         if mods.running(game.get("exe")):
             return self.send_json({"ok": False, "code": "game_running", "error": "游戏正在运行"})
         self.send_json(mods.deploy_all(game))
+
+    def doctor(self, body):
+        game = game_payload(body.get("key"))
+        if not game:
+            return self.send_json({"ok": False, "code": "game_not_found", "error": "游戏不存在"})
+        try:
+            self.send_json(doctor.diagnose(game))
+        except Exception as e:
+            self.send_json({"ok": False, "code": "doctor_failed", "error": str(e)})
+
+    def doctor_fix(self, body):
+        game = game_payload(body.get("key"))
+        if not game:
+            return self.send_json({"ok": False, "code": "game_not_found", "error": "游戏不存在"})
+        try:
+            res = doctor.apply_fix(game, body.get("fix") or {})
+        except Exception as e:
+            return self.send_json({"ok": False, "code": "fix_failed", "error": str(e)})
+        res["report"] = doctor.diagnose(game)
+        self.send_json(res)
 
     def install(self, body, raw):
         key = self.headers.get("X-Game")

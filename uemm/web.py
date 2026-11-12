@@ -70,6 +70,14 @@ tr.off .name{opacity:.45}
 .v.ok{background:#12301f;color:#54d29a}
 .v.warn{background:#3a2c12;color:#e5b03a}
 .v.bad,.v.unsupported{background:#331717;color:#e57373}
+#docBox:empty{display:none}
+.drow{display:flex;align-items:flex-start;gap:12px;padding:11px 16px;border-top:1px solid #21252f}
+.drow .dtext{flex:1;min-width:0}
+.dtitle{font-size:13px;font-weight:500;margin-bottom:2px}
+.drow.error .dtitle{color:#e57373}
+.drow.warn .dtitle{color:var(--warn)}
+.drow.info .dtitle{color:var(--dim)}
+.drow button{flex:none}
 .src{font-size:11px;padding:1px 7px;border-radius:20px;background:#1b202b;border:1px solid var(--line);color:var(--dim);margin-left:6px}
 .grow{display:flex;align-items:center;gap:9px;padding:10px 16px;border-bottom:1px solid #21252f;cursor:pointer}
 .grow:last-child{border-bottom:none}
@@ -151,6 +159,17 @@ ol.order li{padding:1px 0}
     </div>
   </div>
 
+  <div class="panel" id="docPanel">
+    <h2><span data-t="doc.title"></span> <span class="hint" id="docSum"></span></h2>
+    <div class="body" style="padding-bottom:8px">
+      <div class="row">
+        <button class="primary" onclick="runDoctor()" data-t="doc.btn"></button>
+        <span class="hint" id="docIdle" data-t="doc.idle"></span>
+      </div>
+    </div>
+    <div id="docBox"></div>
+  </div>
+
   <div class="panel">
     <h2><span data-t="sec.order"></span> <span class="hint" data-t="sec.order.hint"></span></h2>
     <div class="body"><ol class="order" id="order"><li class="hint">—</li></ol></div>
@@ -222,7 +241,7 @@ async function loadGames(keep){
 
   renderGames();
   renderUnsupported();
-  if (current) await loadState();
+  if (current) { await loadState(); await runDoctor(); }
   else {
     $('modsBox').innerHTML = `<div class="empty">${t('hint.noGames')}</div>`;
     $('paths').innerHTML = '';
@@ -274,7 +293,68 @@ $('gameList').addEventListener('click', async e => {
   current = row.dataset.key;
   renderGames();
   await loadState();
+  await runDoctor();
 });
+
+let docIssues = [];
+
+function resetDoctor(){
+  docIssues = [];
+  if (!$('docBox')) return;
+  $('docBox').innerHTML = '';
+  $('docSum').textContent = '';
+  $('docIdle').textContent = t('doc.idle');
+}
+
+async function runDoctor(){
+  if (!current) return;
+  $('docIdle').textContent = t('msg.processing');
+  const r = await post('/api/doctor', {key: current});
+  if (r.code || r.error){ say(errText(r), 'badmsg'); resetDoctor(); return; }
+  renderDoctor(r);
+}
+
+function renderDoctor(rep){
+  docIssues = rep.issues || [];
+  const box = $('docBox');
+  if (rep.running){
+    $('docSum').textContent = '';
+    box.innerHTML = `<div class="body"><span class="hint" style="color:var(--warn)">${esc(t('doc.running'))}</span></div>`;
+    return;
+  }
+  if (!docIssues.length){
+    $('docSum').textContent = '';
+    $('docIdle').textContent = '';
+    box.innerHTML = `<div class="body"><span class="hint okmsg">${esc(t('doc.clean'))}</span></div>`;
+    return;
+  }
+  const errs = docIssues.filter(i => i.severity === 'error').length;
+  $('docSum').textContent = t('doc.summary', {e: errs, w: docIssues.length - errs});
+  $('docIdle').textContent = '';
+  box.innerHTML = docIssues.map((it, i) => `
+    <div class="drow ${it.severity}">
+      <div class="dtext">
+        <div class="dtitle">${esc(t('doc.k.' + it.kind))}</div>
+        <div class="hint">${esc(t('doc.k.' + it.kind + '.d', it.params))}</div>
+      </div>
+      ${it.fixable ? `<button class="ghost" onclick="fixIssue(${i})">${esc(t('doc.fix'))}</button>` : ''}
+    </div>`).join('');
+}
+
+async function fixIssue(i){
+  const it = docIssues[i];
+  if (!it || !it.fix) return;
+  say(t('msg.processing'));
+  const r = await post('/api/doctor_fix', {key: current, fix: it.fix});
+  if (r.ok){
+    say(t('doc.fixed', {n: r.changed || 0}), 'okmsg');
+    await loadState();
+    if (r.report) renderDoctor(r.report);
+  } else {
+    say(errText(r), 'badmsg');
+    if (r.report) renderDoctor(r.report);
+  }
+}
 
 async function loadState(){
   if (!current) return;
@@ -315,6 +395,7 @@ async function loadState(){
 
   renderMods(r.mods || []);
   renderOrder(r.order || []);
+  resetDoctor();
 }
 
 function renderMods(mods){
