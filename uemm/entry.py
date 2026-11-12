@@ -51,13 +51,22 @@ def _command():
     return str(root), f'"{pythonw}" -m uemm'
 
 
+def _vbs_quote(text):
+    """把任意字符串变成合法的 VBScript 字符串字面量。
+
+    内部的每个 " 都要写成 ""，否则命令里的引号会提前闭合字符串。
+    """
+    return '"' + text.replace('"', '""') + '"'
+
+
 def _vbs(target, open_browser):
     workdir, cmd = _command()
     args = ' --open' if open_browser else ''
+    run = _vbs_quote(cmd + args)
     lines = [
         'Set sh = CreateObject("WScript.Shell")',
-        f'sh.CurrentDirectory = "{workdir}"',
-        f'sh.Run "{cmd}{args}", 0, False',
+        f'sh.CurrentDirectory = {_vbs_quote(workdir)}',
+        f'sh.Run {run}, 0, False',
     ]
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text("\r\n".join(lines) + "\r\n", encoding="ascii")

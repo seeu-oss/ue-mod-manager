@@ -614,13 +614,23 @@ class TestEntry(unittest.TestCase):
                 os.environ[k] = v
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def _run_cmd(self, path):
+        """把 sh.Run 那一行按 VBScript 规则解回真实命令行。"""
+        line = [l for l in path.read_text(encoding="ascii").splitlines()
+                if l.startswith("sh.Run ")][0]
+        literal = line[len("sh.Run "):].rsplit(", 0, False", 1)[0]
+        self.assertTrue(literal.startswith('"') and literal.endswith('"'), literal)
+        inner = literal[1:-1]
+        self.assertNotIn('"', inner.replace('""', ""), "有未转义的引号")
+        return inner.replace('""', '"')
+
     def test_install_and_remove_desktop(self):
         self.assertFalse(entry.status()["desktop"])
         path = Path(entry.install_desktop())
         self.assertTrue(path.is_file())
-        body = path.read_text(encoding="ascii")
-        self.assertIn("--open", body)
-        self.assertIn("Shell", body)
+        cmd = self._run_cmd(path)
+        self.assertTrue(cmd.endswith("--open"), cmd)
+        self.assertIn(".exe", cmd.lower())
         self.assertTrue(entry.status()["desktop"])
 
         entry.remove_desktop()
@@ -629,6 +639,7 @@ class TestEntry(unittest.TestCase):
     def test_autostart_has_no_browser(self):
         body = Path(entry.install_autostart()).read_text(encoding="ascii")
         self.assertNotIn("--open", body)
+        self.assertFalse(self._run_cmd(Path(entry.startup_file())).endswith("--open"))
         self.assertTrue(entry.status()["autostart"])
 
     def test_paths_use_env_override(self):
