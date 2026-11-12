@@ -19,7 +19,7 @@ os.environ["UEMM_HOME"] = _TMP_HOME
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from uemm import detect, doctor, i18n, mods, store  # noqa: E402
+from uemm import detect, doctor, entry, i18n, mods, store  # noqa: E402
 
 PAK_MAGIC = b"\xe1\x12\x6f\x5a"
 
@@ -597,3 +597,40 @@ class TestDoctor(unittest.TestCase):
             mods.running = orig
         self.assertFalse(res["ok"])
         self.assertEqual(res["code"], "game_running")
+
+
+class TestEntry(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="entry_"))
+        self.old = (os.environ.get("UEMM_DESKTOP"), os.environ.get("UEMM_STARTUP"))
+        os.environ["UEMM_DESKTOP"] = str(self.tmp / "Desktop")
+        os.environ["UEMM_STARTUP"] = str(self.tmp / "Startup")
+
+    def tearDown(self):
+        for k, v in zip(("UEMM_DESKTOP", "UEMM_STARTUP"), self.old):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_install_and_remove_desktop(self):
+        self.assertFalse(entry.status()["desktop"])
+        path = Path(entry.install_desktop())
+        self.assertTrue(path.is_file())
+        body = path.read_text(encoding="ascii")
+        self.assertIn("--open", body)
+        self.assertIn("Shell", body)
+        self.assertTrue(entry.status()["desktop"])
+
+        entry.remove_desktop()
+        self.assertFalse(entry.status()["desktop"])
+
+    def test_autostart_has_no_browser(self):
+        body = Path(entry.install_autostart()).read_text(encoding="ascii")
+        self.assertNotIn("--open", body)
+        self.assertTrue(entry.status()["autostart"])
+
+    def test_paths_use_env_override(self):
+        self.assertEqual(entry.desktop_file().parent, self.tmp / "Desktop")
+        self.assertEqual(entry.startup_file().parent, self.tmp / "Startup")

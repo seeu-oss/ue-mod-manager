@@ -4,12 +4,13 @@ import json
 import os
 import threading
 import traceback
+import urllib.request
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from . import detect, dialogs, doctor, i18n, mods, store
+from . import detect, dialogs, doctor, entry, i18n, mods, store
 from .web import render
 
 
@@ -107,6 +108,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_bytes(200, icon.read_bytes(), "image/x-icon")
             else:
                 self.send_bytes(204, b"", "image/x-icon")
+        elif path == "/api/ping":
+            self.send_json({"app": "uemm", "version": __import__("uemm").__version__,
+                            "port": self.server.server_address[1]})
+
+        elif path == "/api/entry":
+            self.send_json(entry.status())
+
         elif path == "/api/games":
             self.send_json({"games": self.game_list(),
                             "unsupported": self.unsupported_games()})
@@ -174,6 +182,9 @@ class Handler(BaseHTTPRequestHandler):
 
             elif path == "/api/deploy":
                 self.deploy(body)
+
+            elif path == "/api/entry":
+                self.entry_action(body)
 
             elif path == "/api/doctor":
                 self.doctor(body)
@@ -351,6 +362,22 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"ok": False, "code": "game_running", "error": "游戏正在运行"})
         self.send_json(mods.deploy_all(game))
 
+    def entry_action(self, body):
+        kind = body.get("kind")
+        on = bool(body.get("on"))
+        try:
+            if kind == "desktop":
+                path = entry.install_desktop() if on else entry.remove_desktop()
+            elif kind == "autostart":
+                path = entry.install_autostart() if on else entry.remove_autostart()
+            else:
+                return self.send_json({"ok": False, "code": "bad_entry"})
+        except Exception as e:
+            return self.send_json({"ok": False, "code": "entry_failed", "error": str(e)})
+        payload = entry.status()
+        payload.update(ok=True, path=str(path))
+        self.send_json(payload)
+
     def doctor(self, body):
         game = game_payload(body.get("key"))
         if not game:
@@ -403,7 +430,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({"ok": True})
 
 
+def probe(port, timeout=1.5):
+    """这个端口上跑的是不是我们自己。"""
+    try:
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with opener.open(f"http://127.0.0.1:{port}/api/ping", timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8")).get("app") == "uemm"
+    except Exception:
+        return False
+
+
 def serve(port=8780, open_browser=False):
+    if probe(port):
+        url = f"http://127.0.0.1:{port}/"
+        print(f"UE Mod Manager 已在运行  →  {url}")
+        if open_browser:
+            import webbrowser
+            webbrowser.open(url)
+        return
+
     httpd = None
     for candidate in range(port, port + 20):
         try:

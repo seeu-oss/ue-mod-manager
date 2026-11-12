@@ -88,6 +88,12 @@ tr.off .name{opacity:.45}
   color:var(--dim);font-family:Consolas,monospace;font-size:11.5px}
 .grow.dead{opacity:.5}
 #unsupBox:empty{display:none}
+.mtx summary{cursor:pointer;color:var(--dim);font-size:12.5px;padding:11px 16px;list-style:none;border-top:1px solid #21252f}
+.mtx summary::-webkit-details-marker{display:none}
+.mtx summary:hover{color:var(--text)}
+.mtx code{font-family:Consolas,monospace;font-size:11.5px;color:var(--dim)}
+.mtx td{font-size:12.5px;vertical-align:middle}
+.mtx td:first-child{white-space:nowrap}
 .unsup{padding:0 16px}
 .unsup summary{cursor:pointer;color:var(--dim);font-size:12px;padding:9px 0;list-style:none}
 .unsup summary::-webkit-details-marker{display:none}
@@ -136,6 +142,52 @@ ol.order li{padding:1px 0}
         <button class="ghost" onclick="removeGame()" data-t="btn.remove"></button>
       </div>
       <div id="paths" style="margin-top:12px"></div>
+    </div>
+    <details class="mtx">
+      <summary><span data-t="sec.support"></span> <span class="hint" data-t="support.hint"></span></summary>
+      <div class="body" style="border-top:1px solid var(--line)">
+        <table>
+          <thead><tr><th data-t="col.engine"></th><th data-t="col.where"></th>
+            <th style="width:88px" data-t="col.can"></th><th data-t="col.example"></th></tr></thead>
+          <tbody>
+            <tr><td>UE4 / UE5</td><td><code>Content/Paks/~mods/*.pak</code></td>
+              <td><span class="v ok" data-t="st.usable"></span></td>
+              <td>Ready or Not · Palworld · STALKER 2</td></tr>
+            <tr><td>UE4 plugins</td><td><code>&lt;Project&gt;/Plugins/Mods</code></td>
+              <td><span class="v unsupported" data-t="st.unsupported"></span></td>
+              <td>Squad</td></tr>
+            <tr><td>REDengine</td><td><code>archive/pc/mod/*.archive</code></td>
+              <td><span class="v unsupported" data-t="st.unsupported"></span></td>
+              <td>Cyberpunk 2077</td></tr>
+            <tr><td>Unity</td><td><code>BepInEx/plugins/*.dll</code></td>
+              <td><span class="v unsupported" data-t="st.unsupported"></span></td>
+              <td>Genshin Impact</td></tr>
+            <tr><td>Source 2</td><td><code>addons/*.vpk</code></td>
+              <td><span class="v unsupported" data-t="st.unsupported"></span></td>
+              <td>CS2 · Dota 2</td></tr>
+            <tr><td>Creation Engine</td><td><code>Data/*.esp</code></td>
+              <td><span class="v unsupported" data-t="st.unsupported"></span></td>
+              <td>Skyrim · Fallout 4</td></tr>
+          </tbody>
+        </table>
+        <p class="hint" style="margin-top:10px;line-height:1.6" data-t="support.diff"></p>
+      </div>
+    </details>
+  </div>
+
+  <div class="panel" id="entryPanel">
+    <h2><span data-t="entry.title"></span> <span class="hint" id="entryState"></span></h2>
+    <div class="body">
+      <div class="row">
+        <button class="primary" id="deskBtn" onclick="toggleEntry('desktop')" data-t="entry.desktop"></button>
+        <button class="ghost" id="autoBtn" onclick="toggleEntry('autostart')" data-t="entry.autostart"></button>
+        <span class="hint" id="entryMsg" data-t="entry.hint"></span>
+      </div>
+      <div class="kv" style="margin-top:10px"><span data-t="entry.url"></span>
+        <b class="p" id="entryUrl"></b>
+        <button class="ghost" onclick="copyUrl()" data-t="entry.copy"></button>
+      </div>
+      <p class="hint" style="margin-top:8px;line-height:1.6" data-t="entry.bookmark"></p>
     </div>
   </div>
 
@@ -295,6 +347,35 @@ $('gameList').addEventListener('click', async e => {
   await loadState();
   await runDoctor();
 });
+
+let entryState = {};
+
+async function loadEntry(){
+  try {
+    const r = await (await fetch('/api/entry')).json();
+    entryState = r;
+    $('deskBtn').textContent = (r.desktop ? '\u2713 ' : '') + t('entry.desktop');
+    $('autoBtn').textContent = (r.autostart ? '\u2713 ' : '') + t('entry.autostart');
+    $('entryUrl').textContent = location.origin + '/';
+    $('entryState').textContent = '';
+  } catch (e) {}
+}
+
+async function toggleEntry(kind){
+  const on = !entryState[kind];
+  const r = await post('/api/entry', {kind: kind, on: on});
+  if (r.ok){
+    entryState = r;
+    loadEntry();
+    say(on ? t('entry.created', {path: r.path}) : t('entry.removed'), 'okmsg');
+  } else say(errText(r), 'badmsg');
+}
+
+function copyUrl(){
+  const url = location.origin + '/';
+  if (navigator.clipboard) navigator.clipboard.writeText(url);
+  say(t('entry.copy') + '  ' + url, 'okmsg');
+}
 
 let docIssues = [];
 
@@ -563,6 +644,7 @@ window.addEventListener('drop', e => {
   $('langSel').innerHTML = LANGS.map(l =>
     `<option value="${l.code}" ${l.code === LANG ? 'selected' : ''}>${l.name}</option>`).join('');
   applyStatic();
+  loadEntry();
   loadGames();
   setInterval(() => { if (!document.hidden && current) loadState(); }, 10000);
 })();
