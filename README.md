@@ -4,6 +4,8 @@
 
 只做虚幻引擎（UE4 / UE5）游戏的 pak mod。免费、开源、无账号、不联网、不上传任何数据。9 MB 单文件，双击即用。
 
+> **English** — A minimal mod manager for Unreal Engine games. Hardlink deployment (no admin rights, no UAC), pak validation, chunk-conflict detection with one-click fixes. Single 9 MB exe for Windows, no Python required. Everything runs on `127.0.0.1`; nothing is uploaded.
+
 ![界面](docs/screenshot.png)
 
 ## 为什么会有这个
