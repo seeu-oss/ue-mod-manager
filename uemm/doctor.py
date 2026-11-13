@@ -35,11 +35,16 @@ def diagnose(game):
     items = mods.list_mods(game, include_conflicts=False)
     enabled = store.enabled_map(game["key"])
 
-    bad_no_pak, bad_pak, hoist, relink, iostore = [], [], [], [], []
+    bad_no_pak, bad_pak, hoist, relink, iostore, unknown = [], [], [], [], [], []
 
     for m in items:
         mid = m["id"]
         src_dir = staging / mid
+
+        # 版本号读不准的包只提示，不做任何处置：它可能就是好包
+        if m["note_key"] == "unknown_version":
+            unknown.append({"id": mid, "v": m.get("version")})
+            continue
 
         if m["verdict"] == "bad":
             (bad_no_pak if m["note_key"] == "no_pak" else bad_pak).append(mid)
@@ -88,10 +93,28 @@ def diagnose(game):
                              {"kind": "hoist", "ids": hoist}))
     for n, owners in sorted(by_chunk.items()):
         if len(owners) > 1:
+            # chunk 号不参与挂载排序，重复本身多数情况无害，所以只提示不报错。
+            # 提供改号只是为了避开重复的 chunk 索引，不是为了改顺序。
             ids = sorted(owners)[1:]          # 按名字留一个，其余换号
-            issues.append(_issue("chunk", "warn",
+            issues.append(_issue("chunk", "info",
                                  {"n": n, "c": len(owners)},
                                  {"kind": "renumber", "chunk": n, "ids": ids}))
+    if unknown:
+        issues.append(_issue("unknown_version", "info",
+                             {"n": len(unknown), "v": unknown[0]["v"]}, None))
+
+    # 并列的最高优先级：这时谁覆盖谁完全由完整路径的字母序决定，
+    # 而目录名通常带着 Nexus 的文件 ID / 时间戳，等于随机。
+    prio_by_mod = {}
+    for m in items:
+        if not enabled.get(m["id"], True) or not m["pak_names"]:
+            continue
+        prio_by_mod[m["id"]] = max(mods.pak_priority(p) for p in m["pak_names"])
+    if prio_by_mod:
+        top = max(prio_by_mod.values())
+        tied = [mid for mid, p in prio_by_mod.items() if p == top]
+        if len(tied) >= 2:
+            issues.append(_issue("order_tie", "info", {"n": len(tied)}, None))
     if relink:
         issues.append(_issue("copy", "info", {"n": len(relink)},
                              {"kind": "relink", "ids": relink}))

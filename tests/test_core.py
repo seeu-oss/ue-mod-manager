@@ -831,3 +831,117 @@ class TestLauncherArgs(unittest.TestCase):
 
     def test_double_click_opens_browser(self):
         self.assertEqual(self._run_with(["UEMM.exe"]), ["--open"])
+
+
+class TestPakOrdering(unittest.TestCase):
+    """UE 的挂载规则：_P 优先；同组按完整路径字母序；chunk 号不参与排序。
+
+    这些断言是照着引擎行为写的，用来防止再出现"改 chunk 号 = 改顺序"的错误假设。
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="uemm_order_"))
+        self.root = make_game(self.tmp / "Game", project="Proj")
+        self.key = store.add_game(detect.detect_ue(self.root))
+        store.update_game(self.key, staging=str(self.tmp / "staging"))
+        self.game = store.get_game(self.key)
+        self.game["key"] = self.key
+        Path(self.game["staging"]).mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _mod(self, name, pak):
+        d = Path(self.game["staging"]) / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / pak).write_bytes(fake_pak())
+        return d
+
+    def test_priority_numbers(self):
+        self.assertEqual(mods.pak_priority("plain.pak"), 3)
+        self.assertEqual(mods.pak_priority("thing_P.pak"), 103)
+        self.assertEqual(mods.pak_priority("thing_2_P.pak"), 303)
+        self.assertEqual(mods.pak_priority("pakchunk99-WindowsNoEditor_P.pak"), 103)
+        self.assertFalse(mods.is_patch_pak("pakchunk99-x.pak"))
+        self.assertTrue(mods.is_patch_pak("x_P.pak"))
+
+    def test_patch_suffix_beats_later_name(self):
+        self._mod("AMod", "pakchunk99-x.pak")
+        self._mod("ZMod", "zzz-plain.pak")     # 字母序更靠后，但不是补丁包
+        self._mod("BMod", "x_P.pak")           # 补丁包，优先级 103
+        order = mods.load_order(self.game)
+        self.assertEqual(order[-1]["mod"], "BMod", "带 _P 的必须最后挂载")
+        self.assertTrue(order[-1]["patch"])
+        self.assertTrue(order[-1]["winner"])
+
+    def test_folder_name_decides_not_chunk_number(self):
+        # Alpha 的 chunk 号更大，但目录名在字母序更前 → 先挂载，被 Zulu 覆盖
+        self._mod("Alpha", "pakchunk999-a.pak")
+        self._mod("Zulu", "pakchunk1-z.pak")
+        order = mods.load_order(self.game)
+        self.assertEqual([o["mod"] for o in order], ["Alpha", "Zulu"])
+        self.assertEqual(order[-1]["mod"], "Zulu")
+
+    def test_renumber_does_not_change_mount_order(self):
+        """改 chunk 号只是为了避开重复索引，不能假设它会改顺序。"""
+        self._mod("Alpha", "pakchunk99-a.pak")
+        self._mod("Zulu", "pakchunk99-z.pak")
+        before = [o["mod"] for o in mods.load_order(self.game)]
+
+        report = doctor.diagnose(self.game)
+        fix = next(i["fix"] for i in report["issues"] if i["kind"] == "chunk")
+        doctor.apply_fix(self.game, fix)
+
+        after = [o["mod"] for o in mods.load_order(self.game)]
+        self.assertEqual(before, after, "重编号不应该改变挂载顺序")
+
+    def test_chunk_collision_is_only_informational(self):
+        self._mod("Alpha", "pakchunk99-a.pak")
+        self._mod("Zulu", "pakchunk99-z.pak")
+        report = doctor.diagnose(self.game)
+        chunk = next(i for i in report["issues"] if i["kind"] == "chunk")
+        self.assertEqual(chunk["severity"], "info", "同 chunk 号多数情况无害，不该报成警告")
+
+
+class TestUnknownVersion(unittest.TestCase):
+    """版本号读不准时宁可说"不知道"，也不能判成坏包让人把好 mod 撤了。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="uemm_ver_"))
+        self.root = make_game(self.tmp / "Game", project="Proj")
+        self.key = store.add_game(detect.detect_ue(self.root))
+        store.update_game(self.key, staging=str(self.tmp / "staging"))
+        self.game = store.get_game(self.key)
+        self.game["key"] = self.key
+        Path(self.game["staging"]).mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _mod(self, name, payload):
+        d = Path(self.game["staging"]) / name
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "thing.pak").write_bytes(payload)
+        return d
+
+    def test_future_version_is_unknown_not_broken(self):
+        d = self._mod("Future", fake_pak(version=37))
+        self.assertIsNone(mods.pak_info(d / "thing.pak")["valid"])
+        verdict = mods.analyze_mod(d, iostore=False)
+        self.assertEqual(verdict["verdict"], "warn")
+        self.assertEqual(verdict["note_key"], "unknown_version")
+        self.assertEqual(verdict["version"], 37)
+
+    def test_unknown_version_has_no_destructive_fix(self):
+        self._mod("Future", fake_pak(version=37))
+        report = doctor.diagnose(self.game)
+        issue = next((i for i in report["issues"] if i["kind"] == "unknown_version"), None)
+        self.assertIsNotNone(issue, f"应该报出未知版本：{report['issues']}")
+        self.assertFalse(issue["fixable"], "未知版本不能提供一键撤下")
+        self.assertEqual(issue["severity"], "info")
+
+    def test_broken_pak_still_fixable(self):
+        self._mod("Broken", b"\x00" * 200)          # 尾部没有 pak 魔数
+        report = doctor.diagnose(self.game)
+        issue = next(i for i in report["issues"] if i["kind"] == "bad_pak")
+        self.assertTrue(issue["fixable"], "彻底坏掉的包仍然可以一键撤下")

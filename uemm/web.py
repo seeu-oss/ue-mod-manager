@@ -65,6 +65,7 @@ tr.off .name{opacity:.45}
 .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;margin-left:6px}
 .tag.dep{background:#12294a;color:#6aa9f5}
 .tag.off{background:#242835;color:#7d8496}
+.tag.pk{background:#3a2a12;color:#e0a94a}
 .cf{color:#e5b03a;font-size:11.5px;margin-top:2px}
 .v{font-size:11px;padding:1px 7px;border-radius:20px;display:inline-block}
 .v.ok{background:#12301f;color:#54d29a}
@@ -505,7 +506,11 @@ function renderMods(mods){
 function renderOrder(order){
   const box = $('order');
   if (!order.length){ box.innerHTML = '<li class="hint">—</li>'; return; }
-  box.innerHTML = order.map(o => `<li>${esc(o.pak)} <span style="color:#5d6577">— ${esc(o.mod)}</span></li>`).join('');
+  box.innerHTML = order.map(o => {
+    const pk = o.patch ? ' <span class="tag pk">_P</span>' : '';
+    const win = o.winner ? ` <span class="hint" style="color:var(--accent)">← ${esc(t('ord.win'))}</span>` : '';
+    return `<li>${esc(o.pak)} <span style="color:#5d6577">— ${esc(o.mod)}</span>${pk}${win}</li>`;
+  }).join('');
 }
 
 $('modsBox').addEventListener('click', async e => {

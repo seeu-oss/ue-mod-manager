@@ -34,7 +34,9 @@ from .paks import (
     analyze_mod,
     chunk_of,
     human,
+    is_patch_pak,
     pak_info,
+    pak_priority,
     same_file,
     valid_mod_id,
     walk_files,
@@ -45,6 +47,7 @@ __all__ = [
     # paks
     "PAK_EXT", "PAK_MAGIC", "CHUNK_RE", "pak_info", "analyze_mod",
     "walk_files", "human", "valid_mod_id", "chunk_of", "same_file",
+    "pak_priority", "is_patch_pak",
     # deploy
     "MANIFEST", "staging_dir", "mods_target", "ensure_staging", "game_iostore",
     "list_mods", "attach_conflicts", "load_order", "deploy_mod", "undeploy_mod",

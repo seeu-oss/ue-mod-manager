@@ -11,7 +11,15 @@ import threading
 from pathlib import Path
 
 from .. import detect, store
-from .paks import analyze_mod, chunk_of, human, valid_mod_id, walk_files
+from .paks import (
+    analyze_mod,
+    chunk_of,
+    human,
+    is_patch_pak,
+    pak_priority,
+    valid_mod_id,
+    walk_files,
+)
 
 MANIFEST = ".uemm.json"
 
@@ -95,6 +103,7 @@ def list_mods(game, include_conflicts=True):
                 "verdict": verdict["verdict"],
                 "note_key": verdict["note_key"],
                 "valid_paks": verdict["valid_paks"],
+                "version": verdict.get("version"),
             })
 
     if include_conflicts:
@@ -130,15 +139,35 @@ def attach_conflicts(mods):
 
 
 def load_order(game):
-    """按 UE 的挂载顺序列出 pak：文件名排序，越靠后优先级越高。"""
+    """按 UE 的挂载规则推算顺序（只推算，不改任何文件名）。
+
+    规则来自引擎本身，不是社区约定：
+
+    1. 先按优先级分组：`_P.pak` 比 `_N_P.pak` 低，`_N_P` 里 N 越大越高；
+       都没有的排同一组。高优先级的一定覆盖低优先级的。
+    2. 同组内按 **完整相对路径** 的字母序挂载，后挂载的覆盖先挂载的。
+       因为 mod 各自在 `~mods/<目录>/` 里，跨 mod 比的是**目录名**，不是 pak 文件名。
+
+    这意味着改 pak 文件名（比如把 chunk 号改大）**不会**改变跨 mod 的顺序；
+    想让某个 mod 赢，要么给它加 `_P` 后缀，要么把它的目录名排到字母序更后面。
+    """
     rows = []
     for m in list_mods(game, include_conflicts=False):
         if not m["enabled"]:
             continue
-        for pak in m["pak_names"]:
-            rows.append((Path(pak).name.lower(), m["id"], Path(pak).name))
-    rows.sort()
-    return [{"mod": mod, "pak": pak} for _key, mod, pak in rows]
+        for rel in m["pak_names"]:
+            rows.append({
+                "mod": m["id"],
+                "pak": Path(rel).name,
+                "rel": f'{m["id"]}/{rel}',
+                "priority": pak_priority(rel),
+                "patch": is_patch_pak(rel),
+            })
+
+    rows.sort(key=lambda r: (r["priority"], r["rel"].lower()))
+    if rows:
+        rows[-1]["winner"] = True      # 最后挂载 = 覆盖同名资源
+    return rows
 
 
 # --------------------------------------------------------------------------
