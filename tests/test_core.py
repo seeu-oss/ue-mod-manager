@@ -148,15 +148,17 @@ class TestI18n(unittest.TestCase):
 
 
 class TestVortexArchives(unittest.TestCase):
+    """Vortex 下载目录的扫描（探测在 detect，格式化在 server 那层）。"""
+
     def setUp(self):
         from uemm import server
         self.server = server
         self.tmp = Path(tempfile.mkdtemp(prefix="uemm_dl_"))
-        self.old = server.VORTEX_DOWNLOADS
-        server.VORTEX_DOWNLOADS = self.tmp
+        self.old = detect.VORTEX_DOWNLOADS
+        detect.VORTEX_DOWNLOADS = self.tmp
 
     def tearDown(self):
-        self.server.VORTEX_DOWNLOADS = self.old
+        detect.VORTEX_DOWNLOADS = self.old
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_lists_only_supported_and_newest_first(self):
@@ -176,9 +178,10 @@ class TestVortexArchives(unittest.TestCase):
 
         items = self.server.vortex_archives()
         self.assertEqual([i["name"] for i in items], ["nested.zip", "new.pak", "old.zip"])
+        self.assertEqual(items[0]["size"], "30 B", "server 负责把字节数变成可读大小")
 
     def test_missing_folder(self):
-        self.server.VORTEX_DOWNLOADS = self.tmp / "nope"
+        detect.VORTEX_DOWNLOADS = self.tmp / "nope"
         self.assertEqual(self.server.vortex_archives(), [])
 
 

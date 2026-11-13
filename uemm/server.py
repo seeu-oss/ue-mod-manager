@@ -6,7 +6,6 @@ import threading
 import time
 import traceback
 import urllib.request
-import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -57,47 +56,28 @@ class PayloadTooLarge(Exception):
 
 
 
-def initial_scan():
-    """只在进程启动时扫一次；之后要新游戏靠界面上的「重新扫描」。"""
+def scan_and_add():
+    """扫一遍 Steam / Epic，把新游戏写进配置。返回 (发现数, 新增数)。
+
+    启动时和界面上的「重新扫描」共用这一份逻辑，避免两处各写一遍。
+    """
     before = set(store.config()["games"].keys())
     found = detect.scan_games()
     for info in found:
         store.add_game(info)
-    return len(set(store.config()["games"].keys()) - before)
+    added = len(set(store.config()["games"].keys()) - before)
+    return len(found), added
 
 
-VORTEX_DOWNLOADS = Path(os.environ.get("APPDATA", "")) / "Vortex" / "downloads"
+def initial_scan():
+    """只在进程启动时扫一次；之后要新游戏靠界面上的「重新扫描」。"""
+    return scan_and_add()[1]
 
 
 def vortex_archives(limit=50):
-    """Vortex 下载目录里的压缩包，新的排前面。"""
-    if not VORTEX_DOWNLOADS.is_dir():
-        return []
-    # Vortex 按游戏分子目录存放（downloads/<game>/*.zip），所以要递归找
-    try:
-        items = [p for p in VORTEX_DOWNLOADS.rglob("*")
-                 if p.is_file() and p.suffix.lower() in (".zip", ".pak")]
-        items.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    except OSError:
-        return []
-
-    out = []
-    for item in items:
-        out.append({"name": item.name, "size": mods.human(item.stat().st_size),
-                    "path": str(item)})
-        if len(out) >= limit:
-            break
-    return out
-
-
-def zip_paks(path):
-    """只读 zip 的中央目录，拿到 pak / utoc 文件名（不解压、不读整个文件）。"""
-    try:
-        with zipfile.ZipFile(path) as z:
-            return {Path(n).name.lower() for n in z.namelist()
-                    if n.lower().endswith((".pak", ".utoc", ".ucas"))}
-    except Exception:
-        return set()
+    """Vortex 下载目录里的压缩包（带人类可读大小），新的排前面。"""
+    return [dict(item, size=mods.human(item["size"]))
+            for item in detect.vortex_archives(limit)]
 
 
 def game_payload(key):
@@ -298,7 +278,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json({
             "game": game,
             "running": running,
-            "iostore": mods._game_iostore(game),
+            "iostore": mods.game_iostore(game),
             "compat": detect.probe_capabilities(game),
             "vortex": {"path": str(vortex[0]), "mods": vortex[1]} if vortex else None,
             "vortex_archives": vortex_archives(),
@@ -307,12 +287,8 @@ class Handler(BaseHTTPRequestHandler):
         })
 
     def scan(self):
-        found = detect.scan_games()
-        before = set(store.config()["games"].keys())
-        for info in found:
-            store.add_game(info)
-        added = len(set(store.config()["games"].keys()) - before)
-        self.send_json({"ok": True, "found": len(found), "added": added,
+        found, added = scan_and_add()
+        self.send_json({"ok": True, "found": found, "added": added,
                         "games": self.game_list()})
 
     def add_game(self, body):
@@ -390,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
                 continue
 
             if src.suffix.lower() == ".zip":
-                paks = zip_paks(src)
+                paks = mods.zip_paks(src)
                 if not paks:
                     skipped += 1      # 扩展包 / 翻译包，没有 pak，直接跳过
                     continue

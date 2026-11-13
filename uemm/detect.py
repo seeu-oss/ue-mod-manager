@@ -422,6 +422,35 @@ def vortex_staging(game: dict):
     return best
 
 
+VORTEX_DOWNLOADS = Path(os.environ.get("APPDATA", "")) / "Vortex" / "downloads"
+
+
+def vortex_archives(limit=50):
+    """Vortex 下载目录里的压缩包，新的排前面。size 是原始字节数，由调用方格式化。
+
+    Vortex 按游戏分子目录存放（downloads/<game>/*.zip），所以要递归找。
+    """
+    if not VORTEX_DOWNLOADS.is_dir():
+        return []
+    try:
+        items = [p for p in VORTEX_DOWNLOADS.rglob("*")
+                 if p.is_file() and p.suffix.lower() in (".zip", ".pak")]
+        items.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    except OSError:
+        return []
+
+    out = []
+    for item in items:
+        try:
+            out.append({"name": item.name, "size": item.stat().st_size,
+                        "path": str(item)})
+        except OSError:
+            continue
+        if len(out) >= limit:
+            break
+    return out
+
+
 def probe_capabilities(game: dict):
     """判断这个游戏对 pak mod 的接受程度 —— UE 游戏之间差别很大。
 
