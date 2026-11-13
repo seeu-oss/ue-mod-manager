@@ -22,7 +22,10 @@ def show_error(text):
 def main():
     try:
         from uemm.__main__ import main as run
-        run(["--open"])
+        # 双击（没有参数）时默认开浏览器；带了参数就原样交给命令行解析，
+        # 否则 UEMM.exe --port 8795 / --scan 会被悄悄忽略。
+        args = sys.argv[1:]
+        run(args if args else ["--open"])
     except SystemExit:
         raise
     except Exception:

@@ -804,3 +804,27 @@ class TestServerGuards(unittest.TestCase):
         self.assertTrue(self.server_mod.origin_allowed("localhost:8780", "http://localhost:8780", 8780))
         self.assertFalse(self.server_mod.origin_allowed("127.0.0.1:8780", "http://127.0.0.1:9999", 8780))
         self.assertFalse(self.server_mod.origin_allowed("0.0.0.0:8780", None, 8780))
+
+
+class TestLauncherArgs(unittest.TestCase):
+    """打包入口不能把参数写死，否则 UEMM.exe --port / --scan 全部失效。"""
+
+    def _run_with(self, argv):
+        import launcher
+        from uemm import __main__ as entry_main
+        captured = {}
+        original_main, original_argv = entry_main.main, sys.argv
+        entry_main.main = lambda args=None: captured.setdefault("args", args)
+        try:
+            sys.argv = argv
+            launcher.main()
+        finally:
+            entry_main.main, sys.argv = original_main, original_argv
+        return captured.get("args")
+
+    def test_passes_arguments_through(self):
+        self.assertEqual(self._run_with(["UEMM.exe", "--port", "8795"]),
+                         ["--port", "8795"])
+
+    def test_double_click_opens_browser(self):
+        self.assertEqual(self._run_with(["UEMM.exe"]), ["--open"])
