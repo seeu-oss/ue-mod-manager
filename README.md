@@ -1,18 +1,21 @@
 # UE Mod Manager
 
-**Vortex 装不上的 mod，这个工具两下就装上。**
+**我自己装 mod 时反复踩的几个坑，做成了一个小工具。**
 
-只做虚幻引擎（UE4 / UE5）游戏的 pak mod。免费、开源、无账号、不联网、不上传任何数据。9 MB 单文件，双击即用。
+只做虚幻引擎（UE4 / UE5）游戏的 pak mod：放进去、能开关、出问题能查。
+免费、开源、无账号、不联网、不上传任何数据。9 MB 单文件，双击即用。
 
-> **English** — A minimal mod manager for Unreal Engine games. Hardlink deployment (no admin rights, no UAC), pak validation, chunk-conflict detection with one-click fixes. Single 9 MB exe for Windows, no Python required. Everything runs on `127.0.0.1`; nothing is uploaded.
+> **English** — A small tool for the pak-mod problems I kept running into with Unreal Engine games. Hardlink deployment (no admin rights, no UAC), pak validation, chunk-conflict detection with one-click fixes. **Not a replacement for Vortex** — it does one narrow job. Single 9 MB exe for Windows, no Python required. Everything runs on `127.0.0.1`; nothing is uploaded.
 
 ![界面](docs/screenshot.png)
 
 ## 为什么会有这个
 
-不是想再做一个 mod 管理器，是被 Vortex 逼出来的。同一台电脑、同一个游戏（Ready or Not）、同一批 mod：
+不是要替代谁。就是我自己的 mod 装不进去，一路查下来记的笔记，最后变成了代码。
 
-| 你看到的 | 实际发生的 |
+同一个游戏（Ready or Not）、同一批 mod，我遇到的情况：
+
+| 我看到的 | 后来查明白的 |
 |---|---|
 | 界面 9 个 mod 全打绿勾「已启用」 | 游戏目录里 **0 个新文件**，一个都没真的进去 |
 | 点「部署」，进度停在 30% 排序中 | 日志 3 分钟不写一个字，不报错，UAC 也不弹 |
@@ -20,9 +23,18 @@
 | 想改成硬链接部署 | 界面只给一个选项，不给选，也不说为什么 |
 | 让它自动更新 | 25 KB/s，下到 9% 归零重来 |
 
-它内部有 5 种部署方式，对这个游戏判定「硬链接不可用」，于是回退到「符号链接 + 每次现场提权」——而提权那一环从来没成功过，**且它不告诉你**。
+查到最后发现：它内部有 5 种部署方式，对这个游戏判定「硬链接不可用」，于是回退到「符号链接 + 每次现场提权」——而提权那一环从来没成功过，**且它不告诉你**。
 
-这个工具只做一件事：**把 pak 放进 `~mods`，并且让你随时能拿掉。** 用硬链接，不需要任何权限，不弹 UAC，状态和文件永远一致。
+这个工具就是把这些坑填上：**把 pak 放进 `~mods`，并且让你随时能拿掉。** 用硬链接，不需要任何权限，不弹 UAC，状态和文件永远一致。
+
+## 和 Vortex 的关系
+
+不是替代品，是补一刀的那种工具。
+
+- **不抢它的活**：下载、装包、排序、更新这些它做得比我好，我不碰；这个工具只管"pak 到底进没进游戏、能不能一键拿掉"
+- **可以共用同一份文件**：检测到它的暂存目录，点「直接接入」就把它当自己的库用，不搬文件、不重复下载
+- **别同时部署**：两边都往 `~mods` 写会互相覆盖，用哪个就把另一个的部署撤掉
+- **用着没问题就不需要这个**：它是给"装完没效果、又查不出为什么"那一种情况准备的
 
 ## 它不做什么
 
@@ -57,7 +69,7 @@
 
 修完 chunk 冲突后，除保留的那个之外，其余 mod 会被排到更大的 chunk 号（更晚挂载）。下面「挂载顺序」面板会显示修复后的真实顺序，谁覆盖谁一目了然。
 
-## 接着 Vortex 的资源用
+## 接着 Vortex 的资源用（不搬文件）
 
 两个层次，都是零搬运：
 
@@ -192,7 +204,10 @@ UE5 游戏如果 Paks 里有 `.utoc`，mod 也必须带 `.utoc/.ucas`，界面�
     └── Binaries/Win64/*.exe     ← 用于判断游戏是否在运行
 ```
 
-已验证：**Ready or Not**、**Squad**。理论上覆盖所有标准打包的 UE4/UE5 游戏，但不同游戏的 mod 规范不同（有些要求特定前缀，有些走 mod.io），遇到不兼容的欢迎提 issue。
+在 **Ready or Not** 上完整验证过（含 9 个真 mod、5 个共用 `pakchunk99` 的冲突场景）。
+**Squad** 被正确判成「不支持」——它的 mod 是引擎插件（`Plugins/Mods`），根本不看 `~mods`。
+
+理论上覆盖所有标准打包的 UE4/UE5 游戏，但不同游戏的 mod 规范不同（有些要求特定前缀，有些走 mod.io），遇到不兼容的欢迎提 issue。
 
 ## 怎么打开
 
@@ -290,19 +305,33 @@ Windows 上直接双击 `build.bat` 也行。产物在 `dist\UEMM.exe`，约 9 M
 python -m unittest discover -s tests -v
 ```
 
-26 个用例，全部在临时目录里跑（自带假游戏、假 pak、假 Epic 清单），**不碰你真实的游戏目录**。覆盖：游戏识别、支持等级、Vortex 目录误判、pak 校验、硬链接部署、开关、残留清理、zip 路径穿越、同名 pak、配置读写。
+62 个用例，全部在临时目录里跑（自带假游戏、假 pak、假 Epic 清单），**不碰你真实的游戏目录**。覆盖：游戏识别、支持等级、Vortex 目录误判、pak 校验、硬链接部署、开关失败回滚、残留清理、zip 路径穿越、同名 pak、chunk 重编号、配置读写，以及本地接口的 Host / Origin / Content-Type 三道闸。
 
 ## 开发
 
 ```
 uemm/
-├── detect.py   Steam / Epic 库解析 + UE 游戏识别 + 兼容性判断
-├── mods.py     扫描、部署、安装、冲突检测、进程检测
-├── store.py    配置与状态
-├── server.py   HTTP 接口
-├── web.py      单页界面
-└── tests/      隔离环境的单元测试
+├── detect.py      Steam / Epic 库解析、UE 识别、兼容性判断、Vortex 探测
+├── mods/          mod 子系统，一层一件事
+│   ├── paks.py      pak 格式：校验、判定、chunk 号
+│   ├── deploy.py    目录与硬链接：暂存目录、部署、清单
+│   ├── install.py   压缩包落盘：zip / 单个 pak → 暂存目录
+│   └── procs.py     游戏是否在运行
+├── doctor.py      体检 + 一键修复
+├── store.py       配置与状态（~/.uemm）
+├── server.py      HTTP 接口（含来源校验）
+├── web.py         单页界面
+├── i18n.py        6 种语言的文案
+├── entry.py       桌面图标 / 开机自启
+├── dialogs.py     系统文件夹选择框
+└── tests/         隔离环境的单元测试
 ```
+
+`mods/__init__.py` 是对外唯一出口，`server` 和 `doctor` 只从那里取函数，不直接摸子模块。
+
+界面（HTML/CSS/JS）故意内联在 `web.py` 里，不拆成静态文件 —— 这样 PyInstaller 打单文件时不需要额外的 `--add-data`，少一个打包失败的理由。
+
+`detect.py` 保持单文件：它是一组"看这台机器上有什么"的判断，拆开反而要来回传路径。
 
 调试扫描：
 

@@ -11,13 +11,13 @@ ue-mod-manager
 ## 简介（About，英文，一句话）
 
 ```
-Mod manager for Unreal Engine games: hardlink deployment, no UAC, pak validation and chunk-conflict fixes.
+Pak mod toggler for Unreal Engine games: hardlink deploy without UAC, pak validation, chunk-conflict fixes. Built from my own pain points — not a Vortex replacement.
 ```
 
 ## 简介（中文版，备用）
 
 ```
-虚幻引擎游戏的 mod 管理器：硬链接部署、零 UAC、pak 校验与 chunk 冲突修复。
+虚幻引擎 pak mod 开关器：硬链接部署、零 UAC、pak 校验与 chunk 冲突修复。解决我自己踩过的坑，不是 Vortex 的替代品。
 ```
 
 ## Topics（逐个添加）
