@@ -3,6 +3,7 @@
 import json
 import os
 import threading
+import time
 import traceback
 import urllib.request
 import zipfile
@@ -12,6 +13,48 @@ from urllib.parse import unquote, urlparse
 
 from . import detect, dialogs, doctor, entry, i18n, mods, store
 from .web import render
+
+# --------------------------------------------------------------------------
+# 本地服务的安全边界
+#
+# 这个服务只应该被本机浏览器里的界面调用。之前没有做任何校验，结果是：
+#   · 任意网页都能向 127.0.0.1 发跨站 POST（text/plain 可以绕过预检），
+#     删掉部署链接、甚至把进程关掉；
+#   · Host 头不校验，DNS 重绑定就能读到游戏路径这类信息。
+# 下面三件事一起做：校验 Host / 校验 Origin / 只收 application/json。
+# --------------------------------------------------------------------------
+
+MAX_BODY = 2 * 1024 ** 3          # 单个请求体上限 2 GB，避免被撑爆内存
+
+LOOPBACK = ("127.0.0.1", "localhost", "[::1]")
+
+
+def origin_allowed(host_header, origin_header, port):
+    """Host 必须是本机回环地址；带 Origin 时必须同源。"""
+    host = (host_header or "").strip().lower()
+    if host not in {f"{h}:{port}" for h in LOOPBACK}:
+        return False
+    origin = (origin_header or "").strip().rstrip("/").lower()
+    if origin and origin not in {f"http://{h}:{port}" for h in LOOPBACK}:
+        return False
+    return True
+
+
+def log_exception():
+    """完整堆栈只写本地日志，不回给调用方。"""
+    try:
+        path = store.APP_HOME / "error.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n--- {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+            f.write(traceback.format_exc())
+    except Exception:
+        pass
+
+
+class PayloadTooLarge(Exception):
+    pass
+
 
 
 def initial_scan():
@@ -89,16 +132,29 @@ class Handler(BaseHTTPRequestHandler):
 
     def read_body(self):
         length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_BODY:
+            raise PayloadTooLarge(length)
         raw = self.rfile.read(length) if length > 0 else b""
         try:
             return json.loads(raw.decode("utf-8") or "{}"), raw
         except Exception:
             return {}, raw
 
+    def guard(self):
+        port = self.server.server_address[1]
+        return origin_allowed(self.headers.get("Host"),
+                              self.headers.get("Origin"), port)
+
+    def forbidden(self):
+        self.send_json({"ok": False, "code": "forbidden",
+                        "error": "只接受来自本机界面的请求"}, 403)
+
     # ---- 路由 ----
 
     def do_GET(self):
         path = urlparse(self.path).path
+        if not self.guard():
+            return self.forbidden()
         if path in ("/", "/index.html"):
             lang = i18n.pick(self.headers.get("Accept-Language"))
             self.send_bytes(200, render(lang).encode("utf-8"), "text/html; charset=utf-8")
@@ -143,7 +199,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
-        body, raw = self.read_body()
+        if not self.guard():
+            return self.forbidden()
+
+        # 跨站请求无法伪造 application/json（会触发预检），所以正常界面走 JSON，
+        # 只有拖文件上传那一路是原始字节。
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if path != "/api/install" and ctype != "application/json":
+            return self.send_json({"ok": False, "code": "bad_content_type",
+                                   "error": "只接受 application/json"}, 415)
+
+        try:
+            body, raw = self.read_body()
+        except PayloadTooLarge:
+            return self.send_json({"ok": False, "code": "too_large",
+                                   "error": "文件超过 2 GB，请手动放进暂存目录"}, 413)
+        except ValueError:
+            return self.send_json({"ok": False, "code": "bad_request",
+                                   "error": "Content-Length 不合法"}, 400)
         try:
             if path == "/api/games":
                 self.send_json({"games": self.game_list(),
@@ -210,8 +283,9 @@ class Handler(BaseHTTPRequestHandler):
 
             else:
                 self.send_json({"error": "not found"}, 404)
-        except Exception:
-            self.send_json({"ok": False, "error": traceback.format_exc()}, 500)
+        except Exception as e:
+            log_exception()
+            self.send_json({"ok": False, "code": "internal_error", "error": str(e)}, 500)
 
     # ---- 各接口实现 ----
 

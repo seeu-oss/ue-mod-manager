@@ -141,6 +141,15 @@ def set_enabled(key, mod_id, on):
     save_state(st)
 
 
+def clear_enabled(key, mod_id):
+    """删掉某个 mod 的开关记录（回滚用：本次操作前它本来就没有记录）。"""
+    st = state()
+    mods = st.get(key)
+    if isinstance(mods, dict) and mod_id in mods:
+        mods.pop(mod_id, None)
+        save_state(st)
+
+
 # --------------------------------------------------------------------------
 # 部署时的改名映射（只改链接名，不动源文件）
 # 结构：{game_key: {mod_id: {相对路径: 新的相对路径}}}

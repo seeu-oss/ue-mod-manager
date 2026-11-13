@@ -115,6 +115,11 @@ def diagnose(game):
 
 
 def _used_chunks(game):
+    """所有已被占用的 chunk 号：模组暂存目录 + 游戏自带的 pak。
+
+    只避开模组之间撞号是不够的 —— 如果重编号撞上游戏自己的 pakchunk200，
+    会把原版资源顶掉，表现就是"装完游戏坏了"。
+    """
     used = set()
     staging = mods.staging_dir(game)
     if staging and staging.is_dir():
@@ -124,6 +129,15 @@ def _used_chunks(game):
                     n = mods.chunk_of(rel)
                     if n is not None:
                         used.add(n)
+
+    try:
+        for f in Path(game["paks"]).iterdir():
+            if f.is_file() and f.suffix.lower() == ".pak":
+                n = mods.chunk_of(f.name)
+                if n is not None:
+                    used.add(n)
+    except OSError:
+        pass
     return used
 
 

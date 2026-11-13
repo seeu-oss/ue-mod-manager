@@ -3,12 +3,14 @@
 运行：python -m unittest discover -s tests -v
 """
 
+import http.client
 import io
 import json
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -645,3 +647,160 @@ class TestEntry(unittest.TestCase):
     def test_paths_use_env_override(self):
         self.assertEqual(entry.desktop_file().parent, self.tmp / "Desktop")
         self.assertEqual(entry.startup_file().parent, self.tmp / "Startup")
+
+
+class TestToggleRollback(unittest.TestCase):
+    """开/关失败时必须把状态退回去，否则界面显示开着、磁盘上没有文件。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="uemm_rollback_"))
+        self.root = make_game(self.tmp / "Game", project="Proj")
+        self.key = store.add_game(detect.detect_ue(self.root))
+        store.update_game(self.key, staging=str(self.tmp / "staging"))
+        self.game = store.get_game(self.key)
+        self.game["key"] = self.key
+        Path(self.game["staging"]).mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_rollback_when_mod_missing(self):
+        self.assertFalse(store.enabled_map(self.key).get("Ghost", False))
+        res = mods.set_mod(self.game, "Ghost", True)      # 暂存目录里没有这个 mod
+        self.assertFalse(res["ok"])
+        self.assertTrue(res.get("rolled_back"))
+        self.assertFalse(store.enabled_map(self.key).get("Ghost", False),
+                         "部署失败后开关不能停在“开”")
+
+    def test_failed_rollback_preserves_previous_true(self):
+        d = Path(self.game["staging"]) / "Real"
+        d.mkdir(parents=True)
+        (d / "pakchunk99-A_P.pak").write_bytes(fake_pak())
+        mods.set_mod(self.game, "Real", True)
+        self.assertTrue(store.enabled_map(self.key)["Real"])
+
+        shutil.rmtree(d)                                   # 暂存目录被用户删了
+        res = mods.set_mod(self.game, "Real", True)        # 再点一次“开”会失败
+        self.assertFalse(res["ok"])
+        self.assertTrue(store.enabled_map(self.key)["Real"],
+                        "回滚应保留操作前的“开”，而不是翻成“关”")
+
+
+class TestManifestAtomic(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="uemm_manifest_"))
+        self.root = make_game(self.tmp / "Game", project="Proj")
+        self.key = store.add_game(detect.detect_ue(self.root))
+        store.update_game(self.key, staging=str(self.tmp / "staging"))
+        self.game = store.get_game(self.key)
+        self.game["key"] = self.key
+        Path(self.game["staging"]).mkdir(parents=True)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_no_tmp_file_left_behind(self):
+        d = Path(self.game["staging"]) / "M"
+        d.mkdir(parents=True)
+        (d / "pakchunk99-A_P.pak").write_bytes(fake_pak())
+        mods.deploy_mod(self.game, "M")
+        target = mods.mods_target(self.game)
+        self.assertTrue((target / mods.MANIFEST).is_file())
+        self.assertFalse((target / (mods.MANIFEST + ".tmp")).exists(),
+                         "临时文件没被替换掉")
+        data = json.loads((target / mods.MANIFEST).read_text(encoding="utf-8"))
+        self.assertIn("M", data["mods"])
+
+
+class TestRenumberAvoidsBaseGame(unittest.TestCase):
+    """重编号不能撞上游戏自带的 pakchunk，否则会把原版资源顶掉。"""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="uemm_renumber_"))
+        self.root = make_game(self.tmp / "Game", project="Proj")
+        paks = self.root / "Proj" / "Content" / "Paks"
+        (paks / "pakchunk100-Windows.pak").write_bytes(fake_pak())
+        self.key = store.add_game(detect.detect_ue(self.root))
+        store.update_game(self.key, staging=str(self.tmp / "staging"))
+        self.game = store.get_game(self.key)
+        self.game["key"] = self.key
+        staging = Path(self.game["staging"])
+        staging.mkdir(parents=True)
+        for name, pak in (("A", "pakchunk99-A_P.pak"), ("B", "pakchunk99-B_P.pak")):
+            (staging / name).mkdir(parents=True)
+            (staging / name / pak).write_bytes(fake_pak())
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_skips_chunk_used_by_game(self):
+        used = doctor._used_chunks(self.game)
+        self.assertIn(100, used, "游戏自带的 pakchunk100 应该算已占用")
+        self.assertIn(0, used)
+
+        report = doctor.diagnose(self.game)
+        fix = next(i["fix"] for i in report["issues"] if i["kind"] == "chunk")
+        doctor.apply_fix(self.game, fix)
+
+        names = [rel for m in mods.list_mods(self.game, include_conflicts=False)
+                 for rel in m["pak_names"]]
+        chunks = {mods.chunk_of(n) for n in names if mods.chunk_of(n) is not None}
+        self.assertNotIn(100, chunks, f"重编号撞上了游戏自带 pak：{names}")
+
+
+class TestServerGuards(unittest.TestCase):
+    """本地服务只接受本机界面的请求：Host / Origin / Content-Type 三道闸。"""
+
+    @classmethod
+    def setUpClass(cls):
+        from http.server import ThreadingHTTPServer
+        from uemm import server
+        cls.server_mod = server
+        cls.httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        cls.port = cls.httpd.server_address[1]
+        threading.Thread(target=cls.httpd.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.httpd.shutdown()
+        cls.httpd.server_close()
+
+    def _req(self, method, path, body=b"", headers=None):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        conn.request(method, path, body=body, headers=headers or {})
+        resp = conn.getresponse()
+        data = resp.read()
+        conn.close()
+        return resp.status, data
+
+    def test_host_guard(self):
+        st, _ = self._req("GET", "/api/ping", headers={"Host": "evil.example"})
+        self.assertEqual(st, 403)
+
+    def test_origin_guard_on_post(self):
+        good = f"127.0.0.1:{self.port}"
+        body = b'{"key":"nope"}'
+        st, _ = self._req("POST", "/api/state", body, {
+            "Host": good, "Content-Type": "application/json",
+            "Origin": "https://evil.example"})
+        self.assertEqual(st, 403)
+
+    def test_content_type_guard(self):
+        good = f"127.0.0.1:{self.port}"
+        st, _ = self._req("POST", "/api/state", b"{}", {
+            "Host": good, "Content-Type": "text/plain"})
+        self.assertEqual(st, 415, "text/plain 可以被跨站表单伪造，必须拒绝")
+
+    def test_legit_request_passes(self):
+        good = f"127.0.0.1:{self.port}"
+        st, data = self._req("POST", "/api/state", b'{"key":"nope"}', {
+            "Host": good, "Content-Type": "application/json",
+            "Origin": f"http://{good}"})
+        self.assertEqual(st, 200)
+        self.assertIn("game_not_found", data.decode())
+
+    def test_origin_allowed_helper(self):
+        self.assertTrue(self.server_mod.origin_allowed("127.0.0.1:8780", None, 8780))
+        self.assertTrue(self.server_mod.origin_allowed("localhost:8780", "http://localhost:8780", 8780))
+        self.assertFalse(self.server_mod.origin_allowed("127.0.0.1:8780", "http://127.0.0.1:9999", 8780))
+        self.assertFalse(self.server_mod.origin_allowed("0.0.0.0:8780", None, 8780))

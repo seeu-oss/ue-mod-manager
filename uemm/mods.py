@@ -323,8 +323,20 @@ def undeploy_mod(game, mod_id):
 
 
 def set_mod(game, mod_id, on):
+    """开关一个 mod。部署失败要把开关状态退回去，否则界面显示开着、实际没文件。"""
+    previous_map = store.enabled_map(game["key"])
+    had_record = mod_id in previous_map
+    previous = previous_map.get(mod_id, True)
+
     store.set_enabled(game["key"], mod_id, on)
-    return deploy_mod(game, mod_id) if on else undeploy_mod(game, mod_id)
+    result = deploy_mod(game, mod_id) if on else undeploy_mod(game, mod_id)
+    if not result.get("ok"):
+        if had_record:
+            store.set_enabled(game["key"], mod_id, previous)
+        else:
+            store.clear_enabled(game["key"], mod_id)
+        result["rolled_back"] = True
+    return result
 
 
 @_locked
@@ -396,10 +408,13 @@ def _manifest(target: Path):
 
 
 def _save_manifest(target: Path, data):
+    """先写临时文件再原子替换：写一半断电也不会把清单写坏。"""
     try:
         target.mkdir(parents=True, exist_ok=True)
-        with open(target / MANIFEST, "w", encoding="utf-8") as f:
+        tmp = target / (MANIFEST + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, target / MANIFEST)
     except OSError:
         pass
 
